@@ -7,15 +7,18 @@ GBS_RESFILE_RE = '^results_\d+.h5$'
 GBS_CSTEP_RE = '^\d+$'
 
 NSMAP = {'xi':"http://www.w3.org/2001/XInclude"}
-XDMFINFO = {"Version":"3.0"}
+XDMFINFO = {"Version":"2.0"}
 
 def get_gbs_files(path='.'):
     '''Finds GBS results files at given path.'''
     rfiles = []
     r = re.compile(GBS_RESFILE_RE)
     for dirpath, dirnames, filenames in os.walk(path):
+        #dp = dirpath
         matching = list(filter(r.match,filenames))
-    return matching
+    #matching = [os.path.join(dp,s) for s in matching]
+    #matching = [os.path.abspath(s) for s in matching]
+    return natsorted(matching)
 
 def get_legacy_meshgrid(fname):
     '''Builds meshgrid from coord[1-3] arrays.'''
@@ -50,7 +53,9 @@ def get_gbs_meshgrid(fname=None):
 
 def make_grid_sidecar(fname=None):
     '''Make a grid sidecar file'''
+    #dirname = os.path.dirname(fname)
     sidecar_name = 'paraview_grid_sidecar.h5'
+    #sidecar_name = os.path.join(dirname, sidecar_name)
     M = get_gbs_meshgrid(fname)
     N = np.shape(M)
     grid_info = {
@@ -102,7 +107,7 @@ def make_xdmf(results, grid_sidecar, grid_info):
             grid_info['ny'])
     grdstr = dimstr+' 3'
 
-    sidecar_name = 'paraview_results_sidecar.xmf3'
+    sidecar_name = 'paraview_results_sidecar.xmf'
     root = ET.Element("Xdmf", attrib=XDMFINFO, nsmap=NSMAP)
     domain = ET.SubElement(root, 'Domain')
     temporal = ET.SubElement(domain, 'Grid',
@@ -145,13 +150,14 @@ def make_xdmf(results, grid_sidecar, grid_info):
         write_gbs_field_xml(grid, 'vpare', step_info, dimstr)
         write_gbs_field_xml(grid, 'vpari', step_info, dimstr)
 
-    dtd = ET.DTD('Xdmf.dtd')
-    if not dtd.validate(root):
-        print(dtd.error_log.filter_from_errors()[0])
-        exit()
+    #dtd = ET.DTD('Xdmf.dtd')
+    #if not dtd.validate(root):
+    #    print(dtd.error_log.filter_from_errors()[0])
+    #    exit()
 
     tree = ET.ElementTree(root)
-    tree.write(sidecar_name, doctype='<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>')
+    #tree.write(sidecar_name, doctype='<!DOCTYPE Xdmf SYSTEM "Xdmf.dtd" []>')
+    tree.write(sidecar_name)
     return sidecar_name
 
 if __name__=='__main__':
