@@ -1,4 +1,4 @@
-import h5py, os, re, xml
+import h5py, os, re, string, xml
 import lxml.etree as ET
 import numpy as np
 from natsort import natsorted
@@ -100,6 +100,33 @@ def write_gbs_field_xml(rootgrid, field, step_info, dimstr):
         step_info['file']+':/data/var3d/'+field+'/'+step_info['id']
     return None
 
+def write_gbs_function_xml(rootgrid, name, expr, fields, step_info, dimstr):
+    '''Write an attribute field for a single GBS array'''
+    attribute = ET.SubElement(rootgrid, 'Attribute',
+            attrib={
+                'Name':name,
+                'AttributeType':'Scalar',
+                'Center':'Node'
+                })
+    attrib_func = ET.SubElement(attribute, 'DataItem',
+            attrib={
+                'ItemType':'Function',
+                'Function':expr,
+                'Dimensions':dimstr
+                })
+    for field in fields:
+        attrib_data = ET.SubElement(attrib_func, 'DataItem',
+                attrib={
+                    'Format':'HDF',
+                    'NumberType':'Float',
+                    'Precision':'8',
+                    'Dimensions':dimstr
+                    })
+        attrib_data.text = \
+            step_info['file']+':/data/var3d/'+field+'/'+step_info['id']
+
+    return None
+
 def make_xdmf(results, grid_sidecar, grid_info):
     '''Generates Xdmf sidecar'''
     gbs_info = extract_gbs_data(results)
@@ -142,13 +169,21 @@ def make_xdmf(results, grid_sidecar, grid_info):
                     })
         geo_data.text = grid_sidecar+':/XYZ'
 
-        write_gbs_field_xml(grid, 'theta', step_info, dimstr)
-        write_gbs_field_xml(grid, 'strmf', step_info, dimstr)
         write_gbs_field_xml(grid, 'omega', step_info, dimstr)
+        write_gbs_field_xml(grid, 'psi', step_info, dimstr)
+        write_gbs_field_xml(grid, 'strmf', step_info, dimstr)
         write_gbs_field_xml(grid, 'temperature', step_info, dimstr)
         write_gbs_field_xml(grid, 'temperaturi', step_info, dimstr)
+        write_gbs_field_xml(grid, 'theta', step_info, dimstr)
         write_gbs_field_xml(grid, 'vpare', step_info, dimstr)
+        write_gbs_field_xml(grid, 'vparepsi', step_info, dimstr)
         write_gbs_field_xml(grid, 'vpari', step_info, dimstr)
+
+        write_gbs_function_xml(grid, 'n', 'exp($0)', ['theta'], step_info, dimstr)
+        write_gbs_function_xml(grid, 'Te', 'exp($0)', ['temperature'], step_info, dimstr)
+        write_gbs_function_xml(grid, 'Ti', 'exp($0)', ['temperaturi'], step_info, dimstr)
+        write_gbs_function_xml(grid, 'pe', 'exp($0)*exp($1)', ['theta','temperature'], step_info, dimstr)
+        write_gbs_function_xml(grid, 'pi', 'exp($0)*exp($1)', ['theta','temperaturi'], step_info, dimstr)
 
     #dtd = ET.DTD('Xdmf.dtd')
     #if not dtd.validate(root):
