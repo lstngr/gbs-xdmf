@@ -13,12 +13,10 @@ def get_gbs_files(path='.'):
     '''Finds GBS results files at given path.'''
     rfiles = []
     r = re.compile(GBS_RESFILE_RE)
-    for dirpath, dirnames, filenames in os.walk(path):
-        #dp = dirpath
-        matching = list(filter(r.match,filenames))
-    #matching = [os.path.join(dp,s) for s in matching]
-    #matching = [os.path.abspath(s) for s in matching]
-    return natsorted(matching)
+    filenames = [f for f in os.listdir('.') if os.path.isfile(f)]
+    matching = list(filter(r.match,filenames))
+    matching = natsorted(matching)
+    return matching
 
 def get_legacy_meshgrid(fname):
     '''Builds meshgrid from coord[1-3] arrays.'''
