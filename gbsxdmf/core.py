@@ -1,68 +1,121 @@
-import h5py, os, re, string, xml
+#!/bin/env python
+""" Generates an XDMF sidecar to GBS data.
+
+This scripts allows the generation of XDMF-formatted metadata for GBS result
+files. This enables loading GBS result data into programs supporting the XDMF
+format, in particular Paraview.
+
+This code is aimed at being very light and.thus does not rely on the GBS
+library, gbspy. No extensive checks are performed.
+"""
+import os
+import re
+import argparse
+import logging
+import h5py
 import lxml.etree as ET
 import numpy as np
 from natsort import natsorted
 
-GBS_RESFILE_RE = '^results_\d+.h5$'
-GBS_CSTEP_RE = '^\d+$'
+GBS_RESFILE_RE = r'^results_\d+.h5$'
+GBS_CSTEP_RE = r'^\d+$'
 
 NSMAP = {'xi':"http://www.w3.org/2001/XInclude"}
 XDMFINFO = {"Version":"2.0"}
 
-def get_gbs_files(path='.'):
-    '''Finds GBS results files at given path.'''
-    rfiles = []
-    r = re.compile(GBS_RESFILE_RE)
+
+def get_gbs_files(path):
+    '''Finds GBS results files at given path.
+
+    Finds all HDF5 files that match the naming pattern of a GBS output, and
+    returns a sorted list containing these. This routine does not attempt to
+    open the said files, nor to check the consistency between them.
+
+    PARAMETERS
+    ==========
+    path : str
+        Path to the directory containing the result files.
+
+    RETURNS
+    =======
+    list of str
+        A sorted list of the result files that were found.
+    '''
+    regex = re.compile(GBS_RESFILE_RE)
     filenames = [f for f in os.listdir('.') if os.path.isfile(f)]
     matching = list(filter(r.match,filenames))
     matching = natsorted(matching)
     return matching
 
-def get_legacy_meshgrid(fname):
+def get_legacy_meshgrid(file_name, r_0=None, r_scale=None):
     '''Builds meshgrid from coord[1-3] arrays.'''
-    with h5py.File(fname, 'r') as f:
-        xc = f['/data/var3d/theta/coord1'][:]
-        yc = f['/data/var3d/theta/coord2'][:]
-        zc = f['/data/var3d/theta/coord3'][:]
-    X, Y, Z = np.meshgrid(xc, yc, zc)
+    with h5py.File(file_name, 'r') as file_handle:
+        x_c = file_handle['/data/var3d/theta/coord1'][:]
+        y_c = file_handle['/data/var3d/theta/coord2'][:]
+        z_c = file_handle['/data/var3d/theta/coord3'][:]
+
+    logging.debug('{} {} {}'.format(file_name, r_0, r_scale))
+    if r_0 and r_scale:
+        logging.debug('Rescaling original GBS coordinates.')
+        x_c *= r_0 / r_scale
+        y_c *= r_0 / r_scale
+        z_c *= r_0
+    X, Y, Z = np.meshgrid(x_c, y_c, z_c)
+
     flip = lambda a: np.transpose(a, (2, 1, 0))
     X = flip(X)
     Y = flip(Y)
     Z = flip(Z)
     return X, Y, Z
 
-def grid_post(X, Y, Z):
+def transform_torus(X, Y, Z, r_0):
     '''Make toroidal'''
-    R0 = 400
-    Z = (Z - np.min(Z)) / (np.max(Z) - np.min(Z))
-    Z *= 2*np.pi
-    XCM = (X+R0)*np.cos(Z)
-    YCM = (X+R0)*np.sin(Z)
-    ZCM = Y
-    X, Y, Z = XCM, YCM, ZCM
-    return X, Y, Z
+    # Need to renormalize Z to close the torus
+    # Z = (Z - np.min(Z)) / (np.max(Z) - np.min(Z))
+    # Z *= 2*np.pi
+    X = r_0 + X - (np.max(X) - np.min(X)) / 2.
+    if np.any(X<0.):
+        logging.error(('Torus has non-physical dimensions from GBS ',
+                       'normalization data. Data will be rescaled outwards.'))
+        X = X - np.min(X) + r_0 / 1e3
+    xcm = X*np.cos(Z)
+    ycm = X*np.sin(Z)
+    zcm = Y
+    return xcm, ycm, zcm
 
-def get_gbs_meshgrid(fname=None):
-    '''Extracts a meshgrid from given result file.'''
-    X, Y, Z = get_legacy_meshgrid(fname)
-    X, Y, Z = grid_post(X, Y, Z) # Transform grid if needed
-    M = np.stack((X, Y, Z), axis=3)
-    return M
-
-def make_grid_sidecar(fname=None):
+def make_grid_sidecar(which_type, filename, prefix=''):
     '''Make a grid sidecar file'''
-    #dirname = os.path.dirname(fname)
-    sidecar_name = 'paraview_grid_sidecar.h5'
-    #sidecar_name = os.path.join(dirname, sidecar_name)
-    M = get_gbs_meshgrid(fname)
-    N = np.shape(M)
+    major_radius = 1.0
+
+    with h5py.File(filename, 'r') as file_handle:
+        gbs_attrs_group = list(file_handle['data'].keys())[0]
+        rorhos = file_handle['data/' + gbs_attrs_group].attrs['rorho_s']
+    gbs_coords = get_legacy_meshgrid(filename, r_0=major_radius, r_scale=rorhos)
+
+    if which_type == 'rectangle':
+        # Fetch rectangle grid
+        logging.debug('Fetching rectangular grid.')
+    elif which_type == 'torus':
+        gbs_coords = transform_torus(*gbs_coords, major_radius)
+        logging.debug('Fetching toroidal grid.')
+    else:
+        raise ValueError('Grid type is not an allowed topology.')
+
+    gbs_coords = np.stack(gbs_coords, axis=3)
+    gbs_coords_shape = np.shape(gbs_coords)
     grid_info = {
-            'nx':N[1],
-            'ny':N[2],
-            'nz':N[0]
+            'nx': gbs_coords_shape[1],
+            'ny': gbs_coords_shape[2],
+            'nz': gbs_coords_shape[0],
             }
-    with h5py.File(sidecar_name, 'w') as f:
-        f.create_dataset('XYZ', data=M)
+
+    if not prefix:
+        prefix = ''
+    if not prefix.endswith('_'):
+        prefix += '_'
+    sidecar_name = prefix + 'grid.h5'
+    with h5py.File(sidecar_name, 'w') as file_handle:
+        file_handle.create_dataset('XYZ', data=gbs_coords)
     return sidecar_name, grid_info
 
 def extract_gbs_data(results):
@@ -96,7 +149,6 @@ def write_gbs_field_xml(rootgrid, field, step_info, dimstr):
                 })
     attrib_data.text = \
         step_info['file']+':/data/var3d/'+field+'/'+step_info['id']
-    return None
 
 def write_gbs_function_xml(rootgrid, name, expr, fields, step_info, dimstr):
     '''Write an attribute field for a single GBS array'''
@@ -122,8 +174,6 @@ def write_gbs_function_xml(rootgrid, name, expr, fields, step_info, dimstr):
                     })
         attrib_data.text = \
             step_info['file']+':/data/var3d/'+field+'/'+step_info['id']
-
-    return None
 
 def make_xdmf(results, grid_sidecar, grid_info):
     '''Generates Xdmf sidecar'''
@@ -193,8 +243,36 @@ def make_xdmf(results, grid_sidecar, grid_info):
     tree.write(sidecar_name)
     return sidecar_name
 
-if __name__=='__main__':
-    gbs_results = get_gbs_files()
-    grid_fname, grid_info = make_grid_sidecar(gbs_results[0])
+
+def main():
+    """ Processes CLI options and generates XDMF data.
+
+    This function is called whenever the file is run as a script. The steps this
+    function take can be summarized as follow.
+    1. Data from the simulation is gathered (available files, steps, basic
+    domain size, etc.)
+    2. A spatial grid is generated and saved to a HDF5 file.
+    3. The GBS results are parsed (FIXME) for data and corresponding XDMF
+    entries are established.
+    """
+    logging.basicConfig(level=0)
+    parser = argparse.ArgumentParser(
+        description='Generate XDMF sidecar files for GBS simulations.')
+    parser.add_argument(
+        '--topology', metavar='type', type=str, default='rectangle',
+        choices=('rectangle', 'torus'), help=('topology of the generated grid '
+                                              '(rectangle, torus)'))
+    parser.add_argument('--prefix', type=str, default='xdmf',
+                        help='prefix to the output files\' names.')
+    parser.add_argument('path', type=str, default=os.getcwd(),
+                        help='Path containing the GBS results.')
+    args = parser.parse_args()
+
+    gbs_results = get_gbs_files(args.path)
+    grid_fname, grid_info = make_grid_sidecar(args.topology, gbs_results[0],
+                                              prefix=args.prefix)
     make_xdmf(gbs_results, grid_fname, grid_info)
 
+
+if __name__=='__main__':
+    main()
