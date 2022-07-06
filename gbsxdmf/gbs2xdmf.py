@@ -9,7 +9,6 @@ This code is aimed at being very light and.thus does not rely on the GBS
 library, gbspy. No extensive checks are performed.
 """
 import argparse
-import logging
 import os
 import re
 
@@ -56,15 +55,15 @@ def get_legacy_meshgrid(file_name, r_0=None, r_scale=None):
         y_c = file_handle["/data/var3d/theta/coord2"][:]
         z_c = file_handle["/data/var3d/theta/coord3"][:]
 
-    logging.debug("{} {} {}".format(file_name, r_0, r_scale))
     if r_0 and r_scale:
-        logging.debug("Rescaling original GBS coordinates.")
         x_c *= r_0 / r_scale
         y_c *= r_0 / r_scale
         z_c *= r_0
     X, Y, Z = np.meshgrid(x_c, y_c, z_c)
 
-    flip = lambda a: np.transpose(a, (2, 1, 0))
+    def flip(a):
+        return np.transpose(a, (2, 1, 0))
+
     X = flip(X)
     Y = flip(Y)
     Z = flip(Z)
@@ -78,12 +77,6 @@ def transform_torus(X, Y, Z, r_0):
     # Z *= 2*np.pi
     X = r_0 + X - (np.max(X) - np.min(X)) / 2.0
     if np.any(X < 0.0):
-        logging.error(
-            (
-                "Torus has non-physical dimensions from GBS ",
-                "normalization data. Data will be rescaled outwards.",
-            )
-        )
         X = X - np.min(X) + r_0 / 1e3
     xcm = X * np.cos(Z)
     ycm = X * np.sin(Z)
@@ -101,11 +94,9 @@ def make_grid_sidecar(which_type, filename, prefix=""):
     gbs_coords = get_legacy_meshgrid(filename, r_0=major_radius, r_scale=rorhos)
 
     if which_type == "rectangle":
-        # Fetch rectangle grid
-        logging.debug("Fetching rectangular grid.")
+        pass
     elif which_type == "torus":
         gbs_coords = transform_torus(*gbs_coords, major_radius)
-        logging.debug("Fetching toroidal grid.")
     else:
         raise ValueError("Grid type is not an allowed topology.")
 
@@ -218,9 +209,11 @@ def make_xdmf(results, grid_sidecar, grid_info):
             attrib={"Name": "grid" + str(step_info["id"]), "GridType": "Uniform"},
         )
         time = ET.SubElement(grid, "Time", attrib={"Value": str(step_info["time"])})
+        del time
         topology = ET.SubElement(
             grid, "Topology", attrib={"TopologyType": "3DSMesh", "Dimensions": dimstr}
         )
+        del topology
         geometry = ET.SubElement(grid, "Geometry", attrib={"GeometryType": "XYZ"})
         geo_data = ET.SubElement(
             geometry,
@@ -280,7 +273,6 @@ def main():
     3. The GBS results are parsed (FIXME) for data and corresponding XDMF
     entries are established.
     """
-    logging.basicConfig(level=0)
     parser = argparse.ArgumentParser(
         description="Generate XDMF sidecar files for GBS simulations."
     )
@@ -290,7 +282,7 @@ def main():
         type=str,
         default="rectangle",
         choices=("rectangle", "torus"),
-        help=("topology of the generated grid " "(rectangle, torus)"),
+        help=("topology of the generated grid (rectangle, torus)"),
     )
     parser.add_argument(
         "--prefix", type=str, default="xdmf", help="prefix to the output files' names."
@@ -308,4 +300,11 @@ def main():
 
 
 if __name__ == "__main__":
+    # Kind of interface we want:
+    # gbs2xdmf [opts] path [path] [path]...
+    # opts: verbose, geometry, output, progress
+    #   verbose: logging
+    #   progress: tqdm
+    #   geometry: controls rectangular (and z-scaling) or torus (R0)
+    #   output: output file name. Write grid data in plain xdmf
     main()
