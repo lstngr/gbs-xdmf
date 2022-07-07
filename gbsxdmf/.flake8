@@ -1,0 +1,6 @@
+[flake8]
+ignore =
+    E203 # whitespace before ':' - doesn't work well with black
+    E501 # line too long - let black worry about that
+    W503 # line break before binary operator
+max-line-length = 89
